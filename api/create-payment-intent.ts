@@ -1,30 +1,7 @@
-import Stripe from 'stripe';
-import { VercelRequest, VercelResponse } from '@vercel/node';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16',
-});
-
-const generateOrderNumber = (): string => {
-  const timestamp = Date.now().toString().slice(-6);
-  const random = Math.floor(Math.random() * 1000)
-    .toString()
-    .padStart(3, '0');
-  return `KAI-${timestamp}-${random}`;
-};
-
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -36,79 +13,54 @@ export default async function handler(
   }
 
   try {
-    const {
-      firstName,
-      lastName,
-      email,
-      address,
-      city,
-      postcode,
-      quantity,
-      subtotal,
-      delivery,
-      total,
-    } = req.body;
+    const { firstName, lastName, email, address, city, postcode, quantity, subtotal, delivery, total } = req.body;
 
-    // Validate required fields
-    if (
-      !firstName ||
-      !lastName ||
-      !email ||
-      !address ||
-      !city ||
-      !postcode ||
-      !quantity ||
-      total === undefined
-    ) {
+    if (!firstName || !lastName || !email || !address || !city || !postcode || !quantity || total === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const orderNumber = generateOrderNumber();
+    const timestamp = Date.now().toString().slice(-6);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const orderNumber = `KAI-${timestamp}-${random}`;
 
-    // Create Stripe payment intent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(total * 100), // Convert to pence
-      currency: 'gbp',
-      payment_method_types: ['card'],
-      metadata: {
-        orderNumber,
-        firstName,
-        lastName,
-        email,
-        address,
-        city,
-        postcode,
-        quantity: quantity.toString(),
-        subtotal: subtotal.toString(),
-        delivery: delivery.toString(),
+    // Call Stripe API directly
+    const stripeUrl = 'https://api.stripe.com/v1/payment_intents';
+    const stripeAuth = Buffer.from(`${process.env.STRIPE_SECRET_KEY}:`).toString('base64');
+
+    const stripeResponse = await fetch(stripeUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${stripeAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
-      receipt_email: email,
+      body: new URLSearchParams({
+        amount: Math.round(total * 100).toString(),
+        currency: 'gbp',
+        'payment_method_types[]': 'card',
+        'metadata[orderNumber]': orderNumber,
+        'metadata[firstName]': firstName,
+        'metadata[lastName]': lastName,
+        'metadata[email]': email,
+        'metadata[address]': address,
+        'metadata[city]': city,
+        'metadata[postcode]': postcode,
+        'metadata[quantity]': quantity.toString(),
+        receipt_email: email,
+      }).toString(),
     });
 
-    // Send order notification via Zapier webhook if configured
+    const paymentIntent = await stripeResponse.json();
+
+    // Send to Zapier if configured
     if (process.env.ZAPIER_WEBHOOK_URL) {
-      try {
-        await fetch(process.env.ZAPIER_WEBHOOK_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orderNumber,
-            firstName,
-            lastName,
-            email,
-            address,
-            city,
-            postcode,
-            quantity,
-            subtotal,
-            delivery,
-            total,
-            timestamp: new Date().toISOString(),
-          }),
-        });
-      } catch (webhookErr) {
-        console.log('Zapier webhook sent (or queued)');
-      }
+      fetch(process.env.ZAPIER_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderNumber, firstName, lastName, email, address, city, postcode, quantity, subtotal, delivery, total,
+          timestamp: new Date().toISOString(),
+        }),
+      }).catch(() => {});
     }
 
     return res.status(200).json({
@@ -117,8 +69,7 @@ export default async function handler(
       paymentIntentId: paymentIntent.id,
     });
   } catch (error) {
-    console.error('Error creating payment intent:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ error: errorMessage });
+    console.error('Error:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Payment processing failed' });
   }
 }
