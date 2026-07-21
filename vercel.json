@@ -1,9 +1,4 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "out",
-  "env": {
-    "STRIPE_SECRET_KEY": "@stripe_secret_key",
-    "STRIPE_PUBLISHABLE_KEY": "@stripe_publishable_key",
-    "ZAPIER_WEBHOOK_URL": "@zapier_webhook_url"
-  }
+  "outputDirectory": "out"
 }
