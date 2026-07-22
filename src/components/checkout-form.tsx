@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface FormData {
   firstName: string;
@@ -23,246 +23,300 @@ export default function CheckoutForm() {
     postcode: "",
     quantity: 1,
   });
-  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [orderNumber, setOrderNumber] = useState<string | null>(null);
 
   const subtotal = formData.quantity * 3.99;
   const delivery = formData.quantity >= 2 ? 0 : 1.99;
   const total = subtotal + delivery;
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
-      [name]: name === "quantity" ? parseInt(value) : value,
+      [name]: name === "quantity" ? parseInt(value) || 1 : value,
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.firstName || !formData.lastName || !formData.email || !formData.address || !formData.city || !formData.postcode) {
-      alert("Please fill in all fields");
-      return;
-    }
-    setStage("review");
+  const handleQuantityChange = (qty: number) => {
+    setFormData((prev) => ({ ...prev, quantity: Math.max(1, qty) }));
   };
 
   const handlePayment = async () => {
-    setProcessing(true);
+    setStage("processing");
     setError(null);
 
     try {
-      // Call Vercel backend to create payment intent and send webhooks
-      const apiUrl = process.env.NODE_ENV === 'production'
-        ? 'https://kai-clearance.sintra.site/api/create-payment-intent'
-        : 'http://localhost:3000/api/create-payment-intent';
+      // Generate order number
+      const timestamp = Date.now().toString().slice(-6);
+      const random = Math.floor(Math.random() * 1000)
+        .toString()
+        .padStart(3, "0");
+      const newOrderNumber = `KAI-${timestamp}-${random}`;
+      setOrderNumber(newOrderNumber);
 
-      const response = await fetch(apiUrl, {
+      // Create Stripe Checkout Session
+      const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          address: formData.address,
-          city: formData.city,
-          postcode: formData.postcode,
-          quantity: formData.quantity,
-          subtotal: parseFloat(subtotal.toFixed(2)),
-          delivery: parseFloat(delivery.toFixed(2)),
-          total: parseFloat(total.toFixed(2)),
-        }),
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Bearer pk_live_51QJz5xFfTIVYvBYPt7K6L7M8N9o0P1Q2r3S4t5U6V7W8x9Y0z1A2b3C4d5E`,
+        },
+        body: new URLSearchParams({
+          "line_items[0][price_data][currency]": "gbp",
+          "line_items[0][price_data][product_data][name]": "Kai Lead Clip Action Pack",
+          "line_items[0][price_data][unit_amount]": "399",
+          "line_items[0][quantity]": formData.quantity.toString(),
+          "line_items[1][price_data][currency]": "gbp",
+          "line_items[1][price_data][product_data][name]": "Delivery",
+          "line_items[1][price_data][unit_amount]": Math.round(delivery * 100).toString(),
+          "line_items[1][quantity]": "1",
+          customer_email: formData.email,
+          "metadata[orderNumber]": newOrderNumber,
+          "metadata[firstName]": formData.firstName,
+          "metadata[lastName]": formData.lastName,
+          "metadata[address]": formData.address,
+          "metadata[city]": formData.city,
+          "metadata[postcode]": formData.postcode,
+          "metadata[quantity]": formData.quantity.toString(),
+          mode: "payment",
+          success_url: `https://www.kaifishingco.co.uk/order-confirmed?orderNumber=${newOrderNumber}&status=success`,
+          cancel_url: `https://www.kaifishingco.co.uk/products`,
+        }).toString(),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create payment intent");
+        throw new Error("Failed to create checkout session");
       }
 
-      const { clientSecret, orderNumber } = await response.json();
-
-      // Redirect to order confirmation with order details
-      const params = new URLSearchParams({
-        orderNumber,
-        clientSecret,
-        firstName: formData.firstName,
-        email: formData.email,
-        total: total.toFixed(2),
-      });
-      window.location.href = `/order-confirmed?${params.toString()}`;
+      const session = await response.json();
+      if (session.url) {
+        window.location.href = session.url;
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment setup failed");
-      setProcessing(false);
+      setError(err instanceof Error ? err.message : "Payment processing failed");
+      setStage("review");
     }
   };
+
+  if (stage === "processing") {
+    return (
+      <div className="bg-blue-500/10 border border-blue-500/25 rounded-xl p-6">
+        <p className="text-blue-400 font-semibold mb-2">Processing...</p>
+        <p className="text-[#6a737c] text-sm">Redirecting to Stripe secure payment...</p>
+      </div>
+    );
+  }
 
   if (stage === "review") {
     return (
       <div className="space-y-6">
-        <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-6">
-          <h3 className="text-white font-semibold mb-4">Order Summary</h3>
+        <div className="space-y-4 bg-[#0a0c0e] p-6 rounded-xl border border-[#1e2328]">
+          <h4 className="text-white font-semibold">Order Summary</h4>
           <div className="space-y-2 text-sm text-[#6a737c]">
             <p>
-              <span className="text-white">Name:</span> {formData.firstName} {formData.lastName}
+              <span className="text-white">Customer:</span> {formData.firstName} {formData.lastName}
             </p>
             <p>
               <span className="text-white">Email:</span> {formData.email}
             </p>
             <p>
-              <span className="text-white">Address:</span> {formData.address}
-            </p>
-            <p>
-              <span className="text-white">City:</span> {formData.city} {formData.postcode}
+              <span className="text-white">Address:</span> {formData.address}, {formData.city}{" "}
+              {formData.postcode}
             </p>
             <p>
               <span className="text-white">Quantity:</span> {formData.quantity} pack(s)
             </p>
-            <div className="border-t border-emerald-500/25 pt-3 mt-3">
-              <div className="flex justify-between mb-1">
-                <span className="text-[#6a737c]">Subtotal</span>
-                <span className="text-[#6a737c]">£{subtotal.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between mb-2">
-                <span className="text-[#6a737c]">Delivery</span>
-                <span className={delivery === 0 ? "text-emerald-400" : "text-[#6a737c]"}>
-                  {delivery === 0 ? "FREE" : `£${delivery.toFixed(2)}`}
-                </span>
-              </div>
-              <div className="flex justify-between font-bold text-white">
-                <span>Total</span>
-                <span>£{total.toFixed(2)}</span>
-              </div>
+          </div>
+
+          <div className="border-t border-[#1e2328] pt-4 space-y-2 text-sm">
+            <div className="flex justify-between text-[#6a737c]">
+              <span>Subtotal</span>
+              <span>£{subtotal.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-[#6a737c]">
+              <span>Delivery {formData.quantity >= 2 ? "(FREE)" : ""}</span>
+              <span>£{delivery.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-white font-semibold border-t border-[#1e2328] pt-2">
+              <span>Total</span>
+              <span>£{total.toFixed(2)}</span>
             </div>
           </div>
         </div>
 
-        {error && <div className="bg-red-500/10 border border-red-500/25 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>}
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/25 text-red-400 px-4 py-3 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
 
         <button
           onClick={handlePayment}
-          disabled={processing}
-          className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-3 rounded-lg transition-colors"
+          className="w-full bg-[#4a7ab5] hover:bg-[#5a8ac5] text-white py-3 rounded-lg font-semibold transition-colors"
         >
-          {processing ? "Processing..." : `Proceed to Payment — £${total.toFixed(2)}`}
+          Proceed to Stripe Payment
         </button>
 
         <button
           onClick={() => setStage("form")}
-          className="w-full text-center text-[#6a737c] hover:text-white text-sm py-2"
+          className="w-full bg-transparent border border-[#1e2328] hover:border-[#4a7ab5] text-[#4a7ab5] py-3 rounded-lg font-semibold transition-colors"
         >
-          ← Back to Edit
+          Back
         </button>
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div>
-        <label className="block text-white text-sm font-semibold mb-3">Quantity (Packs of 5)</label>
-        <select
-          name="quantity"
-          value={formData.quantity}
-          onChange={handleChange}
-          className="w-full bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600"
-        >
-          {[1, 2, 3, 4, 5].map((n) => (
-            <option key={n} value={n}>
-              {n} pack{n > 1 ? "s" : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="border-t border-[#1e2328] pt-6">
-        <p className="text-white font-semibold text-sm mb-4">Delivery Details</p>
-        <div className="grid grid-cols-2 gap-4">
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        setStage("review");
+      }}
+      className="space-y-6"
+    >
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="firstName" className="block text-sm font-medium text-[#6a737c] mb-2">
+            First Name *
+          </label>
           <input
             type="text"
+            id="firstName"
             name="firstName"
-            placeholder="First Name"
+            required
             value={formData.firstName}
-            onChange={handleChange}
-            required
-            className="bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
-          />
-          <input
-            type="text"
-            name="lastName"
-            placeholder="Last Name"
-            value={formData.lastName}
-            onChange={handleChange}
-            required
-            className="bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
+            onChange={handleInputChange}
+            className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
           />
         </div>
+        <div>
+          <label htmlFor="lastName" className="block text-sm font-medium text-[#6a737c] mb-2">
+            Last Name *
+          </label>
+          <input
+            type="text"
+            id="lastName"
+            name="lastName"
+            required
+            value={formData.lastName}
+            onChange={handleInputChange}
+            className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
+          />
+        </div>
+      </div>
 
+      <div>
+        <label htmlFor="email" className="block text-sm font-medium text-[#6a737c] mb-2">
+          Email Address *
+        </label>
         <input
           type="email"
+          id="email"
           name="email"
-          placeholder="Email Address"
-          value={formData.email}
-          onChange={handleChange}
           required
-          className="w-full mt-4 bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
+          value={formData.email}
+          onChange={handleInputChange}
+          className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
         />
+      </div>
 
+      <div>
+        <label htmlFor="address" className="block text-sm font-medium text-[#6a737c] mb-2">
+          Street Address *
+        </label>
         <input
           type="text"
+          id="address"
           name="address"
-          placeholder="Address"
-          value={formData.address}
-          onChange={handleChange}
           required
-          className="w-full mt-4 bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
+          value={formData.address}
+          onChange={handleInputChange}
+          className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
         />
+      </div>
 
-        <div className="grid grid-cols-2 gap-4 mt-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="city" className="block text-sm font-medium text-[#6a737c] mb-2">
+            City/Town *
+          </label>
           <input
             type="text"
+            id="city"
             name="city"
-            placeholder="City"
-            value={formData.city}
-            onChange={handleChange}
             required
-            className="bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
+            value={formData.city}
+            onChange={handleInputChange}
+            className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
           />
+        </div>
+        <div>
+          <label htmlFor="postcode" className="block text-sm font-medium text-[#6a737c] mb-2">
+            Postcode *
+          </label>
           <input
             type="text"
+            id="postcode"
             name="postcode"
-            placeholder="Postcode"
-            value={formData.postcode}
-            onChange={handleChange}
             required
-            className="bg-[#0d0f11] border border-[#1e2328] text-white px-4 py-2 rounded-lg focus:outline-none focus:border-emerald-600 placeholder-[#4a5058]"
+            value={formData.postcode}
+            onChange={handleInputChange}
+            className="w-full bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white placeholder-[#3a4048] focus:outline-none focus:border-[#4a7ab5] transition-colors"
           />
         </div>
       </div>
 
-      <div className="border-t border-[#1e2328] pt-6 space-y-3">
-        <div className="flex justify-between text-[#6a737c] text-sm">
-          <span>Subtotal ({formData.quantity} pack{formData.quantity > 1 ? "s" : ""})</span>
+      <div>
+        <label className="block text-sm font-medium text-[#6a737c] mb-3">Quantity *</label>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => handleQuantityChange(formData.quantity - 1)}
+            className="bg-[#1e2328] hover:bg-[#252b31] text-white px-4 py-2 rounded-lg transition-colors"
+          >
+            −
+          </button>
+          <input
+            type="number"
+            min="1"
+            value={formData.quantity}
+            onChange={handleInputChange}
+            name="quantity"
+            className="flex-1 bg-[#0a0c0e] border border-[#252b31] rounded-lg px-4 py-2 text-white text-center focus:outline-none focus:border-[#4a7ab5] transition-colors"
+          />
+          <button
+            type="button"
+            onClick={() => handleQuantityChange(formData.quantity + 1)}
+            className="bg-[#1e2328] hover:bg-[#252b31] text-white px-4 py-2 rounded-lg transition-colors"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-[#0a0c0e] p-4 rounded-lg border border-[#1e2328]">
+        <div className="flex justify-between text-[#6a737c] mb-2">
+          <span>Subtotal</span>
           <span>£{subtotal.toFixed(2)}</span>
         </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-[#6a737c]">UK Delivery</span>
-          <span className={delivery === 0 ? "text-emerald-400 font-semibold" : "text-[#6a737c]"}>
-            {delivery === 0 ? "FREE" : `£${delivery.toFixed(2)}`}
-          </span>
+        <div className="flex justify-between text-[#6a737c] mb-3">
+          <span>Delivery {formData.quantity >= 2 ? "(FREE)" : ""}</span>
+          <span>£{delivery.toFixed(2)}</span>
         </div>
-        {formData.quantity >= 2 && <p className="text-emerald-400 text-xs pt-2">✓ Free shipping on 2+ packs!</p>}
-        <div className="flex justify-between text-white font-bold text-lg border-t border-[#1e2328] pt-3">
+        <div className="border-t border-[#1e2328] pt-2 flex justify-between text-white font-semibold">
           <span>Total</span>
           <span>£{total.toFixed(2)}</span>
         </div>
       </div>
 
-      <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-lg transition-colors text-lg">
-        Review Order & Proceed to Payment
+      <button
+        type="submit"
+        className="w-full bg-[#4a7ab5] hover:bg-[#5a8ac5] text-white py-3 rounded-lg font-semibold transition-colors"
+      >
+        Review Order
       </button>
-
-      <p className="text-[#6a737c] text-xs text-center">
-        🔒 Secure payment via Stripe
-      </p>
     </form>
   );
 }
