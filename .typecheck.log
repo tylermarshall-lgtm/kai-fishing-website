@@ -1809,3 +1809,8 @@ api/create-payment-intent.ts(1,20): error TS2307: Cannot find module 'stripe' or
 
 
 9:24:24 PM - Found 0 errors. Watching for file changes.
+
+9:57:10 PM - File change detected. Starting incremental compilation...
+
+
+9:57:10 PM - Found 0 errors. Watching for file changes.
